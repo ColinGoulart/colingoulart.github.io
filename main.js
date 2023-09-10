@@ -9,7 +9,6 @@ canvas.height = screen.height*.7;
 var width = canvas.width;
 var height = canvas.height;
 
-var depth_buffer = new Array(width*height);
 
 var WireFrameView = false;
 
@@ -66,6 +65,16 @@ var client_y = 0;
 var y_rot_bound = 80;
 var tris_queue = [];
 
+var image = new Image();
+image.crossOrigin = 'anonymous';
+image.src = "./Images/Spritesheet.png";
+
+image.onload=()=>{
+        ctx.drawImage(image, 0, 0);
+        var spritesheetdata = ctx.getImageData(0,0,1200, 900).data;
+        console.log(spritesheetdata);
+}
+
 
 //camera_settings
 var fov = 90;
@@ -83,7 +92,9 @@ ctx.font = "20px Arial";
 var error_text = `VOID`;
 ctx.fillText(error_text, canvas.width/2-(error_text.length*(15/5)), canvas.height/2);
 
-var imgData = ctx.getImageData(0,0,canvas.width,canvas.height);
+var depth_buffer = new Array(width*height);
+
+var imgData = ctx.getImageData(0,0,width,height);
 var map_data = imgData.data;
 
 function lerp(a,b,t){ 
@@ -494,7 +505,6 @@ function rasterize(v0,v1,v2,n_x,n_y,n_z,col){
                 var scale = startdistfromplane/projectedlinelength;
 
                 var depth = startdistfromplane==0 ? 0 : 100*scale;
-
 
                 if(depth < depth_buffer[index]){
                     map_data[4*index] =   p_r;
