@@ -1,7 +1,48 @@
 
 
+
 var canvas=document.getElementById("canvas");
 var ctx=canvas.getContext("2d");
+
+var image = new Image();
+image.crossOrigin = 'anonymous';
+image.src = "./Images/Spritesheet.jpg";
+
+var spritesheetdata;
+var sprite;
+
+image.onload=()=>{
+    ctx.drawImage(image, 0, 0);
+    spritesheetdata = ctx.getImageData(0,0,256,256).data;
+    console.log(spritesheetdata);
+    sprite = getSprite(0,0,spritesheetdata);
+    console.log(sprite);
+}
+
+function getSprite(x_index, y_index, spritesheetdata){
+
+    var sprite_sheet_width = 256;
+    
+    var cell_size = 16;
+    var texture = [];
+
+    for(var y=0; y<cell_size<<2; y+=4){
+      for(var x=0; x<cell_size<<2; x+=4){
+
+        var index = (x+y*sprite_sheet_width);
+
+        texture.push(spritesheetdata[index]);
+        texture.push(spritesheetdata[index+1]);
+        texture.push(spritesheetdata[index+2]);
+        texture.push(spritesheetdata[index+3]);
+
+
+      }
+    }
+
+    return texture;
+}
+
 
 canvas.width = screen.width*.7;
 canvas.height = screen.height*.7;
@@ -51,6 +92,7 @@ var mouse_sensitivity = .1;
 var mouse_down = false;
 var focused = false;
 var running = true;
+var affine_enabled = false;
 
 var m_x = 0;
 var m_y = 0;
@@ -65,16 +107,7 @@ var client_y = 0;
 var y_rot_bound = 80;
 var tris_queue = [];
 
-var image = new Image();
-image.crossOrigin = 'anonymous';
-image.src = "./Images/Spritesheet.png";
-
-image.onload=()=>{
-        ctx.drawImage(image, 0, 0);
-        var spritesheetdata = ctx.getImageData(0,0,1200, 900).data;
-        console.log(spritesheetdata);
-}
-
+var physics_enabled = false;
 
 //camera_settings
 var fov = 90;
@@ -164,7 +197,7 @@ var tri_primitive =  [
           ],
         ];
 
-for(var i=0; i<100; i++){
+for(var i=0; i<10; i++){
     //var cube = insertEntity("Cube", new mat4(new vec3(0,1.5,2.5+i*1.1)));
    // cube.color = Math.floor(Math.random() * 0xFFFFFF);
 }
@@ -174,7 +207,7 @@ player_cube.color = 0xFF00FF;
 
 ///////////// 3D RENDERING ///////////////
 
-function apply_pers(vertex){
+function apply_pers_proj(vertex){
 
   if(!vertex) return;    
  
@@ -185,13 +218,16 @@ function apply_pers(vertex){
   var f = 1/tan(rad(fov)/2);
 
   var h = zfar/(zfar-znear);
-  var nz = abs(z*h-h*znear);
+  var w = abs(z*h-h*znear);
+
+  w = (w==0?1:w);
 
   return [
-          aspect_ratio*f*x/(nz==0?1:nz),
-          f*y/(nz==0?1:nz),
-          z
-         ];
+          (aspect_ratio*f*x)/w,
+          (f*y)/w,
+          z/w,
+          1/w
+        ];
 }
 
 function apply_cam(vertex){ 
@@ -313,8 +349,6 @@ function clamp(x,a,b){
     return Math.min(Math.max(x,a),b);
 };
 
-
-
 function setPixel(x,y,col,alpha){
 
     y=floor(y+.5);
@@ -412,13 +446,20 @@ function CROSS(A,B){
             A[1]*B[2] - A[2]*B[1],
             A[2]*B[0] - A[0]*B[2],
             A[0]*B[1] - A[1]*B[0]
-            ];
+    ];
 
+}
+
+function SUB(A,B){
+  return [A[0]-B[0], A[1]-B[1], A[2]-B[2]];
+}
+
+function MAG(VEC){
+  return Math.sqrt(VEC[0]*VEC[0]+VEC[1]*VEC[1]+VEC[2]*VEC[2]);
 }
 
 function UNIT(VEC){
     var MAG = Math.sqrt(VEC[0]*VEC[0]+VEC[1]*VEC[1]+VEC[2]*VEC[2]);
-   // console.log(VEC);
     return [VEC[0]/MAG, VEC[1]/MAG, VEC[2]/MAG];
 }
 
@@ -459,13 +500,57 @@ function LineIntersectsPlane(ls_x,ls_y,ls_z,le_x,le_y,le_z,n_x,n_y,n_z,o_x,o_y,o
 }
 
 
-function rasterize(v0,v1,v2,n_x,n_y,n_z,col){
+function getTextureCoordinates(v0, v1, v2){
 
-    var min_x = floor(clamp(scale_transform_x(Math.min(v0[0], v1[0], v2[0])), 0, width)+.5);
-    var max_x = floor(clamp(scale_transform_x(Math.max(v0[0], v1[0], v2[0])), 0, width)+.5);
 
-    var max_y = floor(clamp(scale_transform_y(Math.min(v0[1], v1[1], v2[1])), 0, height)+.5);
-    var min_y = floor(clamp(scale_transform_y(Math.max(v0[1], v1[1], v2[1])), 0, height)+.5);
+}
+
+function rasterize(v0,v1,v2,n_x,n_y,n_z,tri_info,col,texture_coords){
+
+    var tri_prim_v0 = tri_info[0][0];
+    var tri_prim_v1 = tri_info[0][1];
+    var tri_prim_v2 = tri_info[0][2];
+
+    var v0_x = v0[0];
+    var v0_y = v0[1];
+    var v0_z = v0[2];
+    var v0_w = v0[3];
+
+    var v1_x = v1[0];
+    var v1_y = v1[1];
+    var v1_z = v1[2];
+    var v1_w = v1[3];
+
+    var v2_x = v2[0];
+    var v2_y = v2[1];
+    var v2_z = v2[2];
+    var v2_w = v2[3];
+
+    var min_x = floor(scale_transform_x(Math.min(v0_x, v1_x, v2_x))+.5);
+    var max_x = floor(scale_transform_x(Math.max(v0_x, v1_x, v2_x))+.5);
+
+    var max_y = floor(scale_transform_y(Math.min(v0_y, v1_y, v2_y))+.5);
+    var min_y = floor(scale_transform_y(Math.max(v0_y, v1_y, v2_y))+.5);
+
+
+    var texture_coords_00 = texture_coords[0][0];
+    var texture_coords_10 = texture_coords[1][0];
+    var texture_coords_20 = texture_coords[2][0];
+
+    var texture_coords_01 = texture_coords[0][1];
+    var texture_coords_11 = texture_coords[1][1];
+    var texture_coords_21 = texture_coords[2][1];
+
+    if(!affine_enabled){
+    
+      texture_coords_00 *= v0[3];
+      texture_coords_10 *= v1[3];
+      texture_coords_20 *= v2[3];
+
+      texture_coords_01 *= v0[3];
+      texture_coords_11 *= v1[3];
+      texture_coords_21 *= v2[3];
+    }
     
     var secondary_col = 0;
 
@@ -473,49 +558,55 @@ function rasterize(v0,v1,v2,n_x,n_y,n_z,col){
     var s_g = 0;
     var s_b = 0;
 
-    for(var y=min_y; y<max_y; y++){
-        for(var x=min_x; x<max_x; x++){
+    for(var y=clamp(min_y, 0, width); y<clamp(max_y, 0, height); y++){
+        for(var x=clamp(min_x, 0, width); x<clamp(max_x, 0, width); x++){
 
             var p_x = (x-width/2)/width; 
             var p_y = -(y-height/2)/height;
 
-            var c1 = (v1[0]-v0[0])*(p_y-v0[1])-(v1[1]-v0[1])*(p_x-v0[0]); 
-            var c2 = (v2[0]-v1[0])*(p_y-v1[1])-(v2[1]-v1[1])*(p_x-v1[0]); 
-            var c3 = (v0[0]-v2[0])*(p_y-v2[1])-(v0[1]-v2[1])*(p_x-v2[0]);
+            var AREA =   (v1_y-v2_y)*(v0_x-v2_x)+(v2_x-v1_x)*(v0_y-v2_y);
+            var alpha = ((v1_y-v2_y)*(p_x-v2_x)+(v2_x-v1_x)*(p_y-v2_y))/AREA; //How close pixel is to v0 
+            var beta =  ((v2_y-v0_y)*(p_x-v2_x)+(v0_x-v2_x)*(p_y-v2_y))/AREA; //How close pixel is to v1
+            var gamma = 1-alpha-beta; // How close pixel is to v2
 
-
-            var p_r = (col>>16)&0xFF;
-            var p_g = (col>>8)&0xFF;
-            var p_b = col&0xFF;
-
-
-            if(c1 >= 0 && c2 >= 0 && c3 >= 0){
+            if(alpha >= 0 && beta >= 0 && gamma >= 0){ // winning pixels
 
                 var index = x+y*width; 
 
-                var c1_x = p_x - v0[0];
-                var c1_y = p_y - v0[1];
+                var u =  ((texture_coords_00)*alpha)
+                        +((texture_coords_10)*beta)
+                        +((texture_coords_20)*gamma);
 
-                var startdistfromplane = c1_x*n_x
-                                        +c1_y*n_y
-                                        -v0[2]*n_z;
+                        
+                var v = 
+                        ((texture_coords_01)*alpha)+
+                        ((texture_coords_11)*beta)+
+                        ((texture_coords_21)*gamma);
 
 
-                var projectedlinelength = -100*n_z;
-                var scale = startdistfromplane/projectedlinelength;
+                var w =  (alpha*(v0_w)
+                          +beta*(v1_w)
+                          +gamma*(v2_w));
 
-                var depth = startdistfromplane==0 ? 0 : 100*scale;
 
-                if(depth < depth_buffer[index]){
-                    map_data[4*index] =   p_r;
-                    map_data[4*index+1] = p_g;
-                    map_data[4*index+2] = p_b;
-                    map_data[4*index+3] = 255*(1/(depth));
-                    depth_buffer[index] = depth;
+                var sprite_index = floor((u/(affine_enabled ? 1 : w))*16)+floor((v/(affine_enabled ? 1 : w))*16)*16;
+
+                var p_r = sprite[(sprite_index<<2)]; //(col>>16)&0xFF;
+                var p_g = sprite[(sprite_index<<2)+1]; //(col>>8)&0xFF;
+                var p_b = sprite[(sprite_index<<2)+2]; //col&0xFF;
+
+
+                if(1/w < depth_buffer[index]){
+                    map_data[(index<<2)] =   p_r*(keys[69]?alpha:1);
+                    map_data[(index<<2)+1] = p_g*(keys[69]?beta:1);
+                    map_data[(index<<2)+2] = p_b*(keys[69]?gamma:1);
+                    map_data[(index<<2)+3] = 255;
+                    depth_buffer[index] = 1/w;
                 }
                                 
             }
         }
+
     }
 }
 
@@ -526,23 +617,26 @@ function drawTri(tri_info){
   var mat4 = tri_info[1];
   var col = tri_info[2];
   var normal = tri_info[3];
+  var texture_coords = tri_info[4];
 
   var p0 = transform(tri[0],mat4);
   var p1 = transform(tri[1],mat4);
   var p2 = transform(tri[2],mat4);
 
-  var v0 = apply_pers(apply_cam(p0));
-  var v1 = apply_pers(apply_cam(p1));
-  var v2 = apply_pers(apply_cam(p2));
+  var v0 = apply_pers_proj(apply_cam(p0)); 
+  var v1 = apply_pers_proj(apply_cam(p1));
+  var v2 = apply_pers_proj(apply_cam(p2));
 
+  console.log(texture_coords);
 
-  var n_x = (v1[1]-v0[1])*(v2[2]-v1[2]) - (v1[2]-v0[2])*(v2[1]-v1[1]);
-  var n_y = (v1[2]-v0[2])*(v2[0]-v1[0]) - (v1[0]-v0[0])*(v2[2]-v1[2]);
-  var n_z = (v1[0]-v0[0])*(v2[1]-v1[1]) - (v1[1]-v0[1])*(v2[0]-v1[0]);
+  var n_x = (v1[1]-v0[1])*(v2[2]-v1[2])-(v1[2]-v0[2])*(v2[1]-v1[1]);
+  var n_y = (v1[2]-v0[2])*(v2[0]-v1[0])-(v1[0]-v0[0])*(v2[2]-v1[2]);
+  var n_z = (v1[0]-v0[0])*(v2[1]-v1[1])-(v1[1]-v0[1])*(v2[0]-v1[0]);
 
   drawLine(v0,v1,v2,true,n_x,n_y,n_z,col);
   drawLine(v1,v2,v0,true,n_x,n_y,n_z,col);
   drawLine(v2,v0,v1,true,n_x,n_y,n_z,col);
+
 
   if(!WireFrameView){
       rasterize(
@@ -555,7 +649,11 @@ function drawTri(tri_info){
         n_y,
         n_z,
 
-        col
+        tri_info,
+
+        col,
+
+        texture_coords
       );
   }
 
@@ -598,22 +696,22 @@ function renderTris(){
 }
 
 
-function queueTris(tris,mat4,col){
-   for(var i=0; i<tris.length; i++){
+function queueTris(entity){
+  for(var i=0; i<entity.tris.length; i++){
 
-        var tri = tris[i];
+        var tri = entity.tris[i];
 
-        var pos_x = mat4.pos.x;
-        var pos_y = mat4.pos.y;
-        var pos_z = mat4.pos.z;
+        var pos_x = entity.mat4.pos.x;
+        var pos_y = entity.mat4.pos.y;
+        var pos_z = entity.mat4.pos.z;
 
         var cam_x = cam.pos.x;
         var cam_y = cam.pos.y;
         var cam_z = cam.pos.z;
 
-        var p1 = transform(tri[0],mat4);
-        var p2 = transform(tri[1],mat4);
-        var p3 = transform(tri[2],mat4);
+        var p1 = transform(tri[0],entity.mat4);
+        var p2 = transform(tri[1],entity.mat4);
+        var p3 = transform(tri[2],entity.mat4);
 
         var center = [
                       (p1[0]+p2[0]+p3[0])/3, 
@@ -636,7 +734,7 @@ function queueTris(tris,mat4,col){
 
 
         if(view_proj < 0){
-            tris_queue.push([tri, mat4, col, normal]);
+            tris_queue.push([tri, entity.mat4, entity.col, normal, entity.texture_coords[i]]);
         }
     }
 }
@@ -658,7 +756,7 @@ function render(){
    }
 
   for(var i=0; i<entities.length; i++){
-    queueTris(entities[i].tris,entities[i].mat4,entities[i].color); //Vertice Buffer
+    queueTris(entities[i]); //Vertice Buffer
   }
 
   renderTris() 
@@ -693,16 +791,18 @@ function update(dt){
     a+=.1;
     if(a>=2*pi)a=0;
 
-    var flat_foward = new vec3(sin(cam.ry),0,cos(cam.ry));
+    var flat_foward = physics_enabled ? new vec3(sin(cam.ry),0,cos(cam.ry)) : cam.foward_vec;
 
-    velocity = velocity.add(new vec3(0,-.9/canvas.height,0));
+    if(physics_enabled){
+      velocity = velocity.add(new vec3(0,-.9/canvas.height,0));
 
-    if(plr_pos.y+velocity.y <= 0){
-        plr_pos.y = 0;
-        velocity = new vec3(0,0,0);
+      if(plr_pos.y+velocity.y <= 0){
+          plr_pos.y = 0;
+          velocity = new vec3(0,0,0);
+      }
+
+      plr_pos = plr_pos.add(velocity);
     }
-
-    plr_pos = plr_pos.add(velocity);
     cam.pos = plr_pos.add(new vec3(0,2,0));
     //player_cube.mat4.pos = plr_pos;
 
@@ -720,8 +820,8 @@ function update(dt){
         if (keys[40]) cam.rot(rad(1),0,0);
     }
 
-    player_cube.mat4.rot(0,0,rad(1));
-    //player_cube.mat4.pos = new vec3(cos(a),sin(a)+1.5,2);
+  //  player_cube.mat4.rot(0,rad(1),rad(1.5));
+  //player_cube.mat4.pos = new vec3(cos(a),sin(a)+1.5,2);
     
     cam_spd = keys[16]?30:15;
 
